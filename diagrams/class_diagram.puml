@@ -1,1 +1,107 @@
+@startuml Phase3_ClassDiagram
+!theme plain
 
+package "Input Module" {
+    class DynamicInputReader {
+        -config: Dict
+        -output_queue: Queue
+        -input_delay: float
+        -dataset_path: str
+        -schema_mapping: Dict
+        -columns_config: List
+        
+        +__init__(config, output_queue, input_delay, dataset_path)
+        +run(): void
+        -_build_column_map(csv_header): Dict
+        -_cast_value(value, data_type): Any
+        -_transform_row(row, column_map): Dict
+    }
+}
+
+package "Core Module" {
+    class FunctionalCore {
+        +{static}calculate_running_average(values): float
+        +{static}calculate_sliding_window(current_value, window, window_size): tuple
+    }
+    
+    class ImperativeShell {
+        -window_size: int
+        -sliding_window: deque
+        -processing_count: int
+        
+        +__init__(window_size)
+        +process_value(value): float
+    }
+    
+    class SignatureVerifier {
+        -config: Dict
+        -input_queue: Queue
+        -output_queue: Queue
+        -secret_key: str
+        -iterations: int
+        -algorithm: str
+        
+        +__init__(config, input_queue, output_queue)
+        +run(): void
+        -_verify_signature(raw_value, provided_signature): bool
+    }
+    
+    class StreamAggregator {
+        -config: Dict
+        -input_queue: Queue
+        -aggregator: ImperativeShell
+        -last_computed_value: float
+        -last_computed_average: float
+        
+        +__init__(config, input_queue)
+        +run(): void
+    }
+    
+    ImperativeShell o-- FunctionalCore: "delegates to"
+    StreamAggregator o-- ImperativeShell: "uses"
+}
+
+package "Output Module" {
+    class DashboardVisualizer {
+        -config: Dict
+        -telemetry: PipelineTelemetry
+        -aggregator: StreamAggregator
+        -telemetry_config: Dict
+        -data_charts: List
+        -time_series_values: deque
+        -time_series_averages: deque
+        -queue_history: deque
+        
+        +__init__(config, telemetry, aggregator)
+        +run(): void
+        -_get_queue_health(queue_size, max_size): str
+        -_render_telemetry_view(): void
+        -_render_data_charts(): void
+    }
+}
+
+package "Telemetry & Observer" {
+    class PipelineTelemetry {
+        -raw_stream: Queue
+        -processed_stream: Queue
+        -config: Dict
+        -raw_stream_size: int
+        -raw_stream_max_size: int
+        -processed_stream_size: int
+        -processed_stream_max_size: int
+        -observers: List
+        
+        +__init__(raw_data_stream, processed_data_stream, config)
+        +attach_observer(observer): void
+        +detach_observer(observer): void
+        +notify_observers(): void
+        +update(): void
+    }
+}
+
+DynamicInputReader --> "1" SignatureVerifier: "feeds"
+SignatureVerifier --> "1" StreamAggregator: "feeds"
+StreamAggregator --> "1" DashboardVisualizer: "observed by"
+PipelineTelemetry --> "*" DashboardVisualizer: "updates"
+
+@enduml
