@@ -45,9 +45,13 @@ class DashboardVisualizer:
     def _render_data_charts(self):
         if self.aggregator.last_computed_value is not None:
             print(f"  📊 Latest Sensor Value: {self.aggregator.last_computed_value:.2f}")
+        else:
+            print(f"  📊 Latest Sensor Value: Awaiting data...")
         
         if self.aggregator.last_computed_average is not None:
             print(f"  📈 Latest Running Average: {self.aggregator.last_computed_average:.2f}")
+        else:
+            print(f"  📈 Latest Running Average: Awaiting data...")
     
     def run(self):
         try:
