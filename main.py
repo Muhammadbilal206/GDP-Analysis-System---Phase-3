@@ -115,12 +115,21 @@ def orchestrate_pipeline():
             print(f"   ✓ {process.name} started")
         
         print("\n📊 Pipeline Running. Press Ctrl+C to stop.\n")
+        
         try:
             while True:
                 telemetry.update()
+                
+                all_alive = all(p.is_alive() for p in processes)
+                if not all_alive:
+                    print("\n⏹️  All processes completed!")
+                    break
+                
                 time.sleep(0.5)
+        
         except KeyboardInterrupt:
             print("\n\n⏹️  Shutting down pipeline...")
+        
         finally:
             for process in processes:
                 if process.is_alive():
@@ -128,11 +137,14 @@ def orchestrate_pipeline():
                     process.join(timeout=2)
                     if process.is_alive():
                         process.kill()
+                        process.join(timeout=1)
             
             print("✓ All processes terminated")
     
     except Exception as e:
         print(f"Orchestration Error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
