@@ -74,18 +74,28 @@ class DynamicInputReader:
                     data_packet = self._transform_row(row, column_map)
                     
                     if data_packet:
-                        self.output_queue.put(data_packet)
-                        row_count += 1
-                        
-                        if row_count % 100 == 0:
-                            queue_size = self.output_queue.qsize()
-                            print(f"[InputModule] Processed {row_count} rows | Queue size: {queue_size}")
-                        
-                        time.sleep(self.input_delay)
+                        try:
+                            self.output_queue.put(data_packet, timeout=2)
+                            row_count += 1
+                            
+                            if row_count % 100 == 0:
+                                try:
+                                    queue_size = self.output_queue.qsize()
+                                    print(f"[InputModule] Processed {row_count} rows | Queue size: {queue_size}")
+                                except:
+                                    print(f"[InputModule] Processed {row_count} rows")
+                            
+                            time.sleep(self.input_delay)
+                        except Exception as e:
+                            print(f"[InputModule] Queue put error: {e}")
+                            break
                 
                 print(f"[InputModule] ✓ Completed. Total rows: {row_count}")
         
         except Exception as e:
-            print(f"[InputModule] Error: {e}")
+            print(f"[InputModule] Error: {str(e)}")
         finally:
-            self.output_queue.put(None)
+            try:
+                self.output_queue.put(None, timeout=1)
+            except:
+                pass
