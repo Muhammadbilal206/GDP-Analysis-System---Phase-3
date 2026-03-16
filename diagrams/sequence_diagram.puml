@@ -1,1 +1,70 @@
+@startuml Phase3_SequenceDiagram
+!theme plain
 
+participant Main as "Main"
+participant Input as "Input"
+participant RawQ as "raw_data_stream"
+participant SigVer as "SignatureVerifier"
+participant ProcQ as "processed_data_stream"
+participant Agg as "StreamAggregator"
+participant Tel as "PipelineTelemetry"
+participant Dash as "Dashboard"
+
+Main ->> Input: create()
+Main ->> SigVer: create()
+Main ->> Agg: create()
+Main ->> Tel: create()
+Main ->> Dash: create()
+
+Main ->> Input: Process.start()
+Main ->> SigVer: Process.start() (x4)
+Main ->> Agg: Process.start()
+Main ->> Dash: Process.start()
+
+par Input Producer
+    loop For each CSV row
+        Input ->> Input: _transform_row()
+        Input ->> Input: _cast_value()
+        Input ->> RawQ: put(data_packet)
+    end
+    Input ->> RawQ: put(None)
+end
+
+par Signature Verification
+    loop While data available
+        SigVer ->> RawQ: get(data_packet)
+        SigVer ->> SigVer: _verify_signature(PBKDF2)
+        alt Valid
+            SigVer ->> ProcQ: put(verified_packet)
+        else Invalid
+            SigVer ->> SigVer: Drop packet
+        end
+    end
+    SigVer ->> ProcQ: put(None)
+end
+
+par Aggregation
+    loop While data available
+        Agg ->> ProcQ: get(data_packet)
+        Agg ->> Agg: ImperativeShell.process_value()
+        Agg ->> Agg: FunctionalCore.calculate_sliding_window()
+    end
+end
+
+par Telemetry Monitoring
+    loop Continuous polling
+        Tel ->> RawQ: qsize()
+        Tel ->> ProcQ: qsize()
+        Tel ->> Dash: notify_observers()
+    end
+end
+
+par Dashboard Visualization
+    loop Display updates
+        Dash ->> Tel: Get queue health
+        Dash ->> Dash: _render_telemetry_view()
+        Dash ->> Dash: _render_data_charts()
+    end
+end
+
+@enduml
