@@ -27,15 +27,18 @@ class PipelineTelemetry:
     
     def notify_observers(self):
         for observer in self.observers:
-            observer.update(
-                raw_stream_size=self.raw_stream_size,
-                processed_stream_size=self.processed_stream_size
-            )
+            try:
+                observer.update(
+                    raw_stream_size=self.raw_stream_size,
+                    processed_stream_size=self.processed_stream_size
+                )
+            except Exception as e:
+                pass
     
     def update(self):
         try:
             self.raw_stream_size = self.raw_stream.qsize()
             self.processed_stream_size = self.processed_stream.qsize()
             self.notify_observers()
-        except Exception as e:
-            print(f"[Telemetry] Error updating: {e}")
+        except Exception:
+            pass
