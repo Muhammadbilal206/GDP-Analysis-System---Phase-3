@@ -1,16 +1,30 @@
-import hashlib
+from .functional_core import validate_hash
 
-class SignatureVerifier:
-    def __init__(self, secret_key, iterations):
-        self.secret_key = secret_key
-        self.iterations = iterations
+class AuthWorker:
+    def __init__(self, config_data):
+        settings = config_data["processing"]["stateless_tasks"]
+        if settings["algorithm"] != "pbkdf2_hmac":
+            raise ValueError("Configuration error: Algorithm must be pbkdf2_hmac.")
+        
+        self._key = settings["secret_key"]
+        self._iters = settings["iterations"]
 
-    def verify(self, raw_value, signature):
-        val_str = f"{raw_value:.2f}"
-        hash_bytes = hashlib.pbkdf2_hmac(
-            'sha256',
-            self.secret_key.encode('utf-8'),
-            val_str.encode('utf-8'),
-            self.iterations
-        )
-        return hash_bytes.hex() == signature
+    def execute(self, q_in, q_out):
+        while True:
+            item = q_in.get()
+            
+            if item is None:
+                q_out.put(None)
+                break
+
+            is_authentic = validate_hash(
+                metric=item["metric_value"],
+                expected_hash=item["security_hash"],
+                secret=self._key,
+                rounds=self._iters
+            )
+
+            if not is_authentic:
+                item["_dropped"] = True
+                
+            q_out.put(item)
