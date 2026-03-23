@@ -1,12 +1,13 @@
-class PipelineTelemetry:
-    def __init__(self, raw_count, proc_count, max_size):
-        self.raw_count = raw_count
-        self.proc_count = proc_count
-        self.max_size = max_size
+class QueueMonitor:
+    def __init__(self, queue_dict, capacity):
+        self.queue_dict = queue_dict
+        self.capacity = capacity
+        self.listeners = []
 
-    def get_status(self):
-        return {
-            "raw": self.raw_count.value, 
-            "proc": self.proc_count.value, 
-            "limit": self.max_size
-        }
+    def register(self, listener):
+        self.listeners.append(listener)
+
+    def trigger_update(self):
+        status = {name: q.qsize() for name, q in self.queue_dict.items()}
+        for listener in self.listeners:
+            listener.refresh_telemetry(status)
