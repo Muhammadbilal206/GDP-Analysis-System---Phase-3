@@ -1,70 +1,95 @@
-import dash
-from dash import dcc, html
-from dash.dependencies import Output, Input
-import plotly.graph_objs as go
-import queue
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from queue import Empty
 
-class DashboardApp:
-    def __init__(self, telemetry, proc_q, proc_count):
-        self.telemetry = telemetry
-        self.proc_q = proc_q
-        self.proc_count = proc_count
-        self.app = dash.Dash(__name__)
-        self.x_data, self.y_raw, self.y_avg = [], [], []
-        self.setup_layout()
+class LiveVisualizer:
+    def __init__(self, config_data, q_in, monitor):
+        self.settings = config_data
+        self.q_in = q_in
+        self.monitor = monitor
+        self.monitor.register(self)
 
-    def setup_layout(self):
-        self.app.layout = html.Div([
-            html.H1("Real-Time Pipeline Telemetry"),
-            html.Div([
-                html.Div(id='raw-indicator'),
-                html.Div(id='proc-indicator')
-            ]),
-            dcc.Graph(id='live-graph'),
-            dcc.Interval(id='interval-component', interval=500, n_intervals=0)
-        ])
+        self.times = []
+        self.raw_vals = []
+        self.avg_vals = []
+        self.finished = False
 
-        @self.app.callback(
-            [Output('raw-indicator', 'children'), Output('raw-indicator', 'style'),
-             Output('proc-indicator', 'children'), Output('proc-indicator', 'style'),
-             Output('live-graph', 'figure')],
-            [Input('interval-component', 'n_intervals')]
-        )
-        def update(n):
-            stats = self.telemetry.get_status()
-            
-            try:
-                while not self.proc_q.empty():
-                    d = self.proc_q.get_nowait()
-                    if d is None: continue
-                    with self.proc_count.get_lock():
-                        if self.proc_count.value > 0: self.proc_count.value -= 1
-                    
-                    self.x_data.append(len(self.x_data))
-                    self.y_raw.append(d['metric_value'])
-                    self.y_avg.append(d['computed_metric'])
-                    if len(self.x_data) > 50:
-                        self.x_data.pop(0); self.y_raw.pop(0); self.y_avg.pop(0)
-            except queue.Empty:
-                pass
+        self.q_status = {"raw": 0, "verified": 0, "processed": 0}
+        self.capacity = monitor.capacity
 
-            def get_color(val, mx):
-                if val / mx > 0.8: return '#ff6666'
-                if val / mx > 0.5: return '#ffff66'
-                return '#99ff99'
+    def refresh_telemetry(self, status):
+        self.q_status = status
 
-            raw_style = {'padding': '20px', 'display': 'inline-block', 'margin': '10px', 'backgroundColor': get_color(stats['raw'], stats['limit']), 'borderRadius': '5px'}
-            proc_style = {'padding': '20px', 'display': 'inline-block', 'margin': '10px', 'backgroundColor': get_color(stats['proc'], stats['limit']), 'borderRadius': '5px'}
+    def launch(self):
+        chart_cfg = self.settings["visualizations"]["data_charts"]
+        tel_cfg = self.settings["visualizations"]["telemetry"]
 
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=self.x_data, y=self.y_raw, mode='lines', name='Verified Raw'))
-            fig.add_trace(go.Scatter(x=self.x_data, y=self.y_avg, mode='lines', name='Running Average'))
+        fig = plt.figure(figsize=(15, 9))
+        fig.suptitle("Live Data Streams & System Health", fontsize=16, weight="heavy", color="darkblue")
+        grid = fig.add_gridspec(2, 6, height_ratios=[1, 4], hspace=0.4, wspace=0.5)
 
-            return (
-                f"Raw Stream (Input -> Core): {stats['raw']}/{stats['limit']}", raw_style,
-                f"Processed Stream (Core -> Output): {stats['proc']}/{stats['limit']}", proc_style,
-                fig
-            )
+        bars = []
+        keys = []
+        
+        if tel_cfg.get("show_raw_stream"):
+            bars.append((fig.add_subplot(grid[0, 0:2]), "Phase 1: Ingestion"))
+            keys.append("raw")
+        if tel_cfg.get("show_intermediate_stream"):
+            bars.append((fig.add_subplot(grid[0, 2:4]), "Phase 2: Authentication"))
+            keys.append("verified")
+        if tel_cfg.get("show_processed_stream"):
+            bars.append((fig.add_subplot(grid[0, 4:6]), "Phase 3: Aggregation"))
+            keys.append("processed")
 
-    def run(self):
-        self.app.run(debug=False, port=8050, use_reloader=False)
+        plot_val = fig.add_subplot(grid[1, 0:3])
+        plot_avg = fig.add_subplot(grid[1, 3:6])
+
+        def refresh_frame(frame_idx):
+            self.monitor.trigger_update()
+
+            if not self.finished:
+                for _ in range(3):
+                    try:
+                        item = self.q_in.get_nowait()
+                    except Empty:
+                        break
+
+                    if item is None:
+                        self.finished = True
+                        break
+
+                    self.times.append(item[chart_cfg[0]["x_axis"]])
+                    self.raw_vals.append(item[chart_cfg[0]["y_axis"]])
+                    self.avg_vals.append(item[chart_cfg[1]["y_axis"]])
+
+            for idx, (ax, title) in enumerate(bars):
+                self._render_bar(ax, title, self.q_status.get(keys[idx], 0))
+
+            self._render_plot(plot_val, chart_cfg[0]["title"], self.times, self.raw_vals, "indigo")
+            self._render_plot(plot_avg, chart_cfg[1]["title"], self.times, self.avg_vals, "teal")
+
+        self.animation = FuncAnimation(fig, refresh_frame, interval=150, cache_frame_data=False)
+        plt.show()
+
+    def _render_bar(self, ax, title, count):
+        ax.clear()
+        fill_pct = count / self.capacity if self.capacity > 0 else 0
+
+        bar_color = "teal" if fill_pct < 0.4 else "goldenrod" if fill_pct < 0.75 else "crimson"
+
+        ax.barh([0], [1.0], color="whitesmoke", height=0.6)
+        ax.barh([0], [fill_pct], color=bar_color, height=0.6)
+        ax.set_xlim(0, 1)
+        ax.set_title(title, fontsize=11, weight="bold", color="darkslategray")
+        ax.axis("off")
+        ax.text(0.5, 0, f"{count} / {self.capacity}", ha="center", va="center", fontsize=10, weight="bold")
+
+    def _render_plot(self, ax, title, x_arr, y_arr, col):
+        ax.clear()
+        if x_arr and y_arr:
+            ax.plot(x_arr, y_arr, lw=1.8, color=col)
+        ax.set_title(title, fontsize=12, weight="bold")
+        ax.set_xlabel("Time (Ticks)")
+        ax.set_ylabel("Recorded Value")
+        ax.grid(True, ls="--", alpha=0.5)
+        ax.tick_params(axis="x", rotation=45, labelsize=9)
