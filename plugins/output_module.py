@@ -1,83 +1,70 @@
-import time
-from collections import deque
-from typing import Dict
+import dash
+from dash import dcc, html
+from dash.dependencies import Output, Input
+import plotly.graph_objs as go
+import queue
 
-
-class DashboardVisualizer:
-    
-    def __init__(self, config: Dict, telemetry, aggregator):
-        self.config = config
+class DashboardApp:
+    def __init__(self, telemetry, proc_q, proc_count):
         self.telemetry = telemetry
-        self.aggregator = aggregator
-        
-        viz_config = config.get("visualizations", {})
-        self.telemetry_config = viz_config.get("telemetry", {})
-        self.data_charts = viz_config.get("data_charts", [])
-        
-        self.time_series_values = deque(maxlen=200)
-        self.time_series_averages = deque(maxlen=200)
-        
-        self.queue_history = deque(maxlen=50)
-    
-    def _get_queue_health(self, queue_size: int, max_size: int) -> str:
-        percentage = (queue_size / max_size * 100) if max_size > 0 else 0
-        
-        if percentage < 50:
-            return "🟢 Flowing"
-        elif percentage < 80:
-            return "🟡 Filling"
-        else:
-            return "🔴 Backpressure"
-    
-    def _render_telemetry_view(self):
-        if self.telemetry_config.get("show_raw_stream"):
-            raw_size = self.telemetry.raw_stream_size
-            raw_max = self.telemetry.raw_stream_max_size
-            health = self._get_queue_health(raw_size, raw_max)
-            print(f"  📤 Raw Stream: [{raw_size}/{raw_max}] {health}")
-        
-        if self.telemetry_config.get("show_intermediate_stream"):
-            proc_size = self.telemetry.processed_stream_size
-            proc_max = self.telemetry.processed_stream_max_size
-            health = self._get_queue_health(proc_size, proc_max)
-            print(f"  ⚙️  Processed Stream: [{proc_size}/{proc_max}] {health}")
-    
-    def _render_data_charts(self):
-        if self.aggregator.last_computed_value is not None:
-            print(f"  📊 Latest Sensor Value: {self.aggregator.last_computed_value:.2f}")
-        else:
-            print(f"  📊 Latest Sensor Value: Awaiting data...")
-        
-        if self.aggregator.last_computed_average is not None:
-            print(f"  📈 Latest Running Average: {self.aggregator.last_computed_average:.2f}")
-        else:
-            print(f"  📈 Latest Running Average: Awaiting data...")
-    
-    def run(self):
-        try:
-            print("\n[Dashboard] Visualization Started\n")
-            print("=" * 60)
-            print("              PHASE 3 PIPELINE DASHBOARD")
-            print("=" * 60)
+        self.proc_q = proc_q
+        self.proc_count = proc_count
+        self.app = dash.Dash(__name__)
+        self.x_data, self.y_raw, self.y_avg = [], [], []
+        self.setup_layout()
+
+    def setup_layout(self):
+        self.app.layout = html.Div([
+            html.H1("Real-Time Pipeline Telemetry"),
+            html.Div([
+                html.Div(id='raw-indicator'),
+                html.Div(id='proc-indicator')
+            ]),
+            dcc.Graph(id='live-graph'),
+            dcc.Interval(id='interval-component', interval=500, n_intervals=0)
+        ])
+
+        @self.app.callback(
+            [Output('raw-indicator', 'children'), Output('raw-indicator', 'style'),
+             Output('proc-indicator', 'children'), Output('proc-indicator', 'style'),
+             Output('live-graph', 'figure')],
+            [Input('interval-component', 'n_intervals')]
+        )
+        def update(n):
+            stats = self.telemetry.get_status()
             
-            iteration = 0
-            while True:
-                iteration += 1
-                
-                print(f"\n[Frame {iteration}] {time.strftime('%H:%M:%S')}")
-                
-                print("\n  STREAM TELEMETRY:")
-                self._render_telemetry_view()
-                
-                print("\n  DATA VISUALIZATIONS:")
-                self._render_data_charts()
-                
-                print("\n" + "=" * 60)
-                time.sleep(2)
-        
-        except KeyboardInterrupt:
-            print("\n[Dashboard] Shutting down...")
-        except Exception as e:
-            print(f"[Dashboard] Error: {e}")
-        finally:
-            print("[Dashboard] ✓ Closed")
+            try:
+                while not self.proc_q.empty():
+                    d = self.proc_q.get_nowait()
+                    if d is None: continue
+                    with self.proc_count.get_lock():
+                        if self.proc_count.value > 0: self.proc_count.value -= 1
+                    
+                    self.x_data.append(len(self.x_data))
+                    self.y_raw.append(d['metric_value'])
+                    self.y_avg.append(d['computed_metric'])
+                    if len(self.x_data) > 50:
+                        self.x_data.pop(0); self.y_raw.pop(0); self.y_avg.pop(0)
+            except queue.Empty:
+                pass
+
+            def get_color(val, mx):
+                if val / mx > 0.8: return '#ff6666'
+                if val / mx > 0.5: return '#ffff66'
+                return '#99ff99'
+
+            raw_style = {'padding': '20px', 'display': 'inline-block', 'margin': '10px', 'backgroundColor': get_color(stats['raw'], stats['limit']), 'borderRadius': '5px'}
+            proc_style = {'padding': '20px', 'display': 'inline-block', 'margin': '10px', 'backgroundColor': get_color(stats['proc'], stats['limit']), 'borderRadius': '5px'}
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=self.x_data, y=self.y_raw, mode='lines', name='Verified Raw'))
+            fig.add_trace(go.Scatter(x=self.x_data, y=self.y_avg, mode='lines', name='Running Average'))
+
+            return (
+                f"Raw Stream (Input -> Core): {stats['raw']}/{stats['limit']}", raw_style,
+                f"Processed Stream (Core -> Output): {stats['proc']}/{stats['limit']}", proc_style,
+                fig
+            )
+
+    def run(self):
+        self.app.run(debug=False, port=8050, use_reloader=False)
